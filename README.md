@@ -17,7 +17,6 @@ things currently unaviable:
 4.change settings(in progress)
 -----------------------------
 More things will be changed with time.
-I am the only person working on this OS.
 ----------------------------
 If you want make bootable device with this OS, make sure you use Rufus, or other programs to use bootable device.
 ------------How to make bootable device with KrustOS with Rufus--------------------
