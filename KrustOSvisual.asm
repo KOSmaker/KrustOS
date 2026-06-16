@@ -53,17 +53,6 @@ TERM_OUTPUT_ROW equ 5
 TERM_PROMPT_ROW equ 21
 TERM_HELP_ROW equ 23
 
-; Color codes used as inline markers in term_output
-TERM_COLOR_CMD   equ 0x01   ; orange  - user command lines
-TERM_COLOR_RESP  equ 0x02   ; green   - kernel response
-TERM_COLOR_ERR   equ 0x03   ; red     - error response
-
-; VGA palette indices for terminal colors
-COL_CMD  equ 0x06   ; brown/orange
-COL_RESP equ 0x0A   ; bright green
-COL_ERR  equ 0x0C   ; bright red
-COL_DEF  equ 0x0A   ; default (green)
-
 FILES_TEXT_COL equ 10
 FILES_TITLE_COL equ 12
 FILES_FIRST_ROW equ 6
@@ -363,7 +352,10 @@ draw_terminal_window:
 
     mov  dh, TERM_OUTPUT_ROW
     mov  dl, TERM_TEXT_COL
-    call print_term_output_colored
+    mov  bl, 0x0A
+    mov  si, term_output
+    mov  cx, 0x1020
+    call print_wrapped_block
 
     mov  dh, TERM_PROMPT_ROW
     mov  dl, TERM_TEXT_COL
@@ -592,44 +584,17 @@ draw_modal:
 draw_cursor:
     mov  di, [cursor_x]
     mov  bx, [cursor_y]
-    mov  cx, 2
-    mov  dx, 12
-    mov  al, 0x3F
-    call fill_rect
-
-    mov  di, [cursor_x]
-    add  di, 2
-    mov  bx, [cursor_y]
-    add  bx, 2
-    mov  cx, 4
-    mov  dx, 2
-    mov  al, 0x3F
-    call fill_rect
-
-    mov  di, [cursor_x]
-    add  di, 2
-    mov  bx, [cursor_y]
-    add  bx, 4
-    mov  cx, 6
-    mov  dx, 2
-    mov  al, 0x3F
-    call fill_rect
-
-    mov  di, [cursor_x]
-    add  di, 2
-    mov  bx, [cursor_y]
-    add  bx, 6
     mov  cx, 8
     mov  dx, 2
     mov  al, 0x3F
     call fill_rect
 
     mov  di, [cursor_x]
-    add  di, 4
+    add  di, 3
     mov  bx, [cursor_y]
-    add  bx, 8
-    mov  cx, 4
-    mov  dx, 2
+    sub  bx, 3
+    mov  cx, 2
+    mov  dx, 8
     mov  al, 0x3F
     call fill_rect
     ret
@@ -639,117 +604,13 @@ handle_key:
     mov  [last_scan], ah
     mov  [last_char], al
 
-    ; ── NumPad digits (NumLock on): scancodes 0x47-0x52 give chars 7,8,9,-,4,5,6,+,1,2,3,0,.
-    ; BIOS already puts the ASCII digit in AL when NumLock is active, so we
-    ; only need to translate the *movement* scancodes (no ASCII, AL=0 or 0xE0).
-    cmp  al, 0
-    jne  .not_numpad_raw
-    cmp  ah, 0x47  ; Home/7
-    je   .numpad_7
-    cmp  ah, 0x48  ; Up/8
-    je   .numpad_8
-    cmp  ah, 0x49  ; PgUp/9
-    je   .numpad_9
-    cmp  ah, 0x4B  ; Left/4
-    je   .numpad_4
-    cmp  ah, 0x4C  ; 5
-    je   .numpad_5
-    cmp  ah, 0x4D  ; Right/6
-    je   .numpad_6
-    cmp  ah, 0x4F  ; End/1
-    je   .numpad_1
-    cmp  ah, 0x50  ; Down/2
-    je   .numpad_2
-    cmp  ah, 0x51  ; PgDn/3
-    je   .numpad_3
-    cmp  ah, 0x52  ; Ins/0
-    je   .numpad_0
-    cmp  ah, 0x53  ; Del/.  -- keep as scan for delete logic elsewhere
-    jmp  .not_numpad_raw
-.numpad_7: mov al,'7'
-    jmp .numpad_done
-.numpad_8: mov al,'8'
-    jmp .numpad_done
-.numpad_9: mov al,'9'
-    jmp .numpad_done
-.numpad_4: mov al,'4'
-    jmp .numpad_done
-.numpad_5: mov al,'5'
-    jmp .numpad_done
-.numpad_6: mov al,'6'
-    jmp .numpad_done
-.numpad_1: mov al,'1'
-    jmp .numpad_done
-.numpad_2: mov al,'2'
-    jmp .numpad_done
-.numpad_3: mov al,'3'
-    jmp .numpad_done
-.numpad_0: mov al,'0'
-.numpad_done:
-    mov  [last_char], al
-.not_numpad_raw:
-
-    ; ── Case logic: read shift + caps state from BIOS
-    ; int 16h ah=02h: AL = shift flags
-    ;   bit 0 = right shift, bit 1 = left shift, bit 4 = scroll, bit 6 = caps
-    push ax
-    mov  ah, 0x02
-    int  0x16
-    mov  [kbd_shift_flags], al
-    pop  ax
-
-    ; default: last_char_upper = last_char (for non-letter chars)
-    mov  ah, [last_char]
-    mov  [last_char_upper], ah
-
-    ; determine if we want uppercase
-    ; uppercase when: (shift XOR caps) for letters; shift only for symbols
-    mov  ah, [last_char]
-
-    ; only process printable chars for case conversion
-    cmp  ah, 'a'
-    jb   .check_upper_done
-    cmp  ah, 'z'
-    ja   .check_upper_done
-    ; it's a lowercase letter from BIOS
-    ; check caps ^ shift
-    mov  bl, [kbd_shift_flags]
-    test bl, 0x03       ; any shift held?
-    jnz  .shift_held
-    test bl, 0x40       ; caps lock?
-    jz   .want_lower
-    ; caps on, no shift -> uppercase
-    sub  ah, 32
-    mov  [last_char], ah
-    jmp  .check_upper_done
-.shift_held:
-    test bl, 0x40       ; caps lock also on?
-    jnz  .want_lower    ; shift+caps -> lowercase
-    ; shift, no caps -> uppercase
-    sub  ah, 32
-    mov  [last_char], ah
-    jmp  .check_upper_done
-.want_lower:
-    ; keep lowercase - BIOS already gave us lowercase if no shift
-    ; but BIOS may have given uppercase if shift was held - fix it
-    mov  ah, [last_char]
-    cmp  ah, 'A'
-    jb   .check_upper_done
-    cmp  ah, 'Z'
-    ja   .check_upper_done
-    add  ah, 32
-    mov  [last_char], ah
-.check_upper_done:
-
-    ; uppercase-only letters for hotkeys (desktop/files use uppercase checks)
-    ; store a separate uppercase version for hotkey dispatch
-    mov  ah, [last_char]
+    mov  ah, al
     cmp  ah, 'a'
     jb   .dispatch
     cmp  ah, 'z'
     ja   .dispatch
     sub  ah, 32
-    mov  [last_char_upper], ah
+    mov  [last_char], ah
 
 .dispatch:
     cmp  byte [setup_step], SETUP_NONE
@@ -779,7 +640,6 @@ handle_desktop_key:
     mov  al, [last_char]
     cmp  al, 13
     je   .click
-    mov  al, [last_char_upper]
     cmp  al, 'T'
     je   .open_term
     cmp  al, 'F'
@@ -853,9 +713,12 @@ desktop_click:
 
 handle_terminal_key:
     mov  ah, [last_scan]
-    cmp  ah, 0x01       ; ESC
+    cmp  ah, 0x01
     je   .close
-    ; scancodes 0x2A/0x36 are shift keys — do NOT close, they're needed for input
+    cmp  ah, 0x2A
+    je   .close
+    cmp  ah, 0x36
+    je   .close
     mov  al, [last_char]
     cmp  al, 13
     je   .enter
@@ -887,15 +750,6 @@ handle_terminal_key:
     cmp  byte [term_input_len], 0
     je   .done
     call term_log_append_command
-    call term_scroll_to_fit
-    ; --- check for local SETSCREEN command before sending to kernel ---
-    call try_setscreen
-    jc   .kernel_cmd        ; CF=1: was NOT setscreen, send to kernel
-    ; setscreen handled locally - just clear input and redraw
-    call term_scroll_to_fit
-    call clear_term_input
-    ret
-.kernel_cmd:
     mov  si, term_input
     call kernel_exec_string
     mov  [term_kind], al
@@ -905,14 +759,13 @@ handle_terminal_key:
     cmp  byte [term_action], TERM_ACT_CLEAR
     je   .skip_resp
     call term_log_append_kernel_response
-    call term_scroll_to_fit
 .skip_resp:
     call apply_kernel_action
     call clear_term_input
     ret
 
 .hotkeys:
-    mov  al, [last_char_upper]
+    mov  al, [last_char]
     cmp  al, 'F'
     jne  .done
     mov  byte [active_window], WINDOW_FILES
@@ -1027,7 +880,6 @@ handle_files_key:
     mov  al, [last_char]
     cmp  al, 13
     je   .open
-    mov  al, [last_char_upper]
     cmp  al, 'N'
     je   .mkdir
     cmp  al, 'M'
@@ -1530,10 +1382,12 @@ fill_rect:
     mov  bp, [rect_h]
 
 .row:
-    mov  ax, bx
-    mul  word [vesa_stride]
-    add  ax, [rect_x]
-    mov  di, ax
+    mov  di, bx
+    shl  di, 6
+    mov  dx, bx
+    shl  dx, 8
+    add  di, dx
+    add  di, [rect_x]
     mov  cx, [rect_w]
     mov  al, [rect_color]
     rep  stosb
@@ -1858,7 +1712,6 @@ finish_kruststart:
     call store_kruststart_settings
 
     mov  byte [setup_step], SETUP_NONE
-    call init_mouse_support
     call clear_term_input
     call load_user_name_cache
     mov  si, s_ks_done
@@ -2197,7 +2050,10 @@ put_pixel:
     mov  ax, 0xA000
     mov  es, ax
     mov  ax, bx
-    mul  word [vesa_stride]
+    shl  ax, 6
+    mov  dx, bx
+    shl  dx, 8
+    add  ax, dx
     add  ax, di
     mov  di, ax
     mov  [es:di], cl
@@ -2225,92 +2081,37 @@ init_mouse_support:
     push bx
     push cx
     push dx
+    push ds
 
-    mov  byte [mouse_available], 0
-    mov  byte [mouse_prev_left], 0
-    mov  byte [mouse_prev_right], 0
-    mov  byte [mouse_packet_index], 0
+    xor  ax, ax
+    mov  ds, ax
+    mov  ax, [0x00CC]
+    or   ax, [0x00CE]
+    jz   .none
 
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0xAD
-    out  0x64, al
+    mov  ax, 0x0000
+    int  0x33
+    test ax, ax
+    jz   .none
 
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0xA7
-    out  0x64, al
+    mov  ax, 0x0007
+    xor  cx, cx
+    mov  dx, 319
+    int  0x33
 
-    call ps2_flush_output
+    mov  ax, 0x0008
+    xor  cx, cx
+    mov  dx, 199
+    int  0x33
 
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0xA8
-    out  0x64, al
-
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0x20
-    out  0x64, al
-    call ps2_read_data
-    jc   .none
-    mov  bl, al
-    and  bl, 0xFD
-    and  bl, 0xDF
-
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0x60
-    out  0x64, al
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, bl
-    out  0x60, al
-    call ps2_flush_output
-
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0xA9
-    out  0x64, al
-    call ps2_read_data
-    jc   .skip_port_test
-    cmp  al, 0x00
-    jne  .skip_port_test
-.skip_port_test:
-
-    call ps2_wait_input_clear
-    jc   .none
-    mov  al, 0xAE
-    out  0x64, al
-
-    call ps2_mouse_reset
-
-    mov  al, 0xF6
-    call ps2_mouse_send
-    jc   .try_enable_direct
-    mov  al, 0xF4
-    call ps2_mouse_send
-    jc   .none
-    jmp  .ready
-
-.try_enable_direct:
-    mov  al, 0xF4
-    call ps2_mouse_send
-    jc   .none
-
-.ready:
     mov  byte [mouse_available], 1
     jmp  .done
 
 .none:
-    call ps2_wait_input_clear
-    jc   .mouse_off
-    mov  al, 0xAE
-    out  0x64, al
-.mouse_off:
     mov  byte [mouse_available], 0
 
 .done:
+    pop  ds
     pop  dx
     pop  cx
     pop  bx
@@ -2326,276 +2127,38 @@ poll_mouse:
     push cx
     push dx
 
-    mov  cx, 16
-.read_loop:
-    in   al, 0x64
-    test al, 0x01
-    jz   .restore
-    test al, 0x20
-    jz   .restore
-    in   al, 0x60
-
-    mov  bl, [mouse_packet_index]
-    cmp  bl, 0
-    jne  .packet_byte_1
-    test al, 0x08
-    jz   .next_byte
-    mov  [mouse_packet0], al
-    mov  byte [mouse_packet_index], 1
-    jmp  .next_byte
-
-.packet_byte_1:
-    cmp  bl, 1
-    jne  .packet_byte_2
-    mov  [mouse_packet1], al
-    mov  byte [mouse_packet_index], 2
-    jmp  .next_byte
-
-.packet_byte_2:
-    mov  [mouse_packet2], al
-    mov  byte [mouse_packet_index], 0
-    call apply_mouse_packet
-
-.next_byte:
-    loop .read_loop
-
-.restore:
-    pop  dx
-    pop  cx
-    pop  bx
-    pop  ax
-.done:
-    ret
-
-apply_mouse_packet:
-    push ax
-    push bx
-    push cx
-    push dx
-
-    mov  cx, [cursor_x]
-    mov  dx, [cursor_y]
-
-    mov  al, [mouse_packet0]
-    test al, 0x40
-    jnz  .buttons
-    test al, 0x80
-    jnz  .buttons
-
-    xor  ax, ax
-    mov  al, [mouse_packet1]
-    test byte [mouse_packet0], 0x10
-    jz   .x_positive
-    or   ax, 0xFF00
-.x_positive:
-    add  cx, ax
-    cmp  cx, 0
-    jge  .x_min_ok
-    xor  cx, cx
-.x_min_ok:
-    cmp  cx, 312
-    jle  .x_max_ok
-    mov  cx, 312
-.x_max_ok:
-
-    xor  ax, ax
-    mov  al, [mouse_packet2]
-    test byte [mouse_packet0], 0x20
-    jz   .y_positive
-    or   ax, 0xFF00
-.y_positive:
-    sub  dx, ax
-    cmp  dx, 0
-    jge  .y_min_ok
-    xor  dx, dx
-.y_min_ok:
-    cmp  dx, 188
-    jle  .y_max_ok
-    mov  dx, 188
-.y_max_ok:
-
+    mov  ax, 0x0003
+    int  0x33
+    shr  cx, 1
     cmp  cx, [cursor_x]
-    jne  .store_pos
+    jne  .moved
     cmp  dx, [cursor_y]
-    je   .buttons
+    jne  .moved
+    jmp  .store_pos
+.moved:
+    mov  byte [render_pending], 1
 .store_pos:
     mov  [cursor_x], cx
     mov  [cursor_y], dx
-    mov  byte [render_pending], 1
 
-.buttons:
-    mov  al, [mouse_packet0]
-    test al, 1
-    jz   .left_released
+    test bx, 1
+    jz   .released
     cmp  byte [mouse_prev_left], 0
-    jne  .right_button
+    jne  .store
     call handle_mouse_click
     mov  byte [render_pending], 1
     mov  byte [mouse_prev_left], 1
-    jmp  .right_button
+    jmp  .store
 
-.left_released:
+.released:
     mov  byte [mouse_prev_left], 0
 
-.right_button:
-    mov  al, [mouse_packet0]
-    test al, 2
-    jz   .right_released
-    cmp  byte [mouse_prev_right], 0
-    jne  .applied
-    call handle_mouse_right_click
-    mov  byte [render_pending], 1
-    mov  byte [mouse_prev_right], 1
-    jmp  .applied
-
-.right_released:
-    mov  byte [mouse_prev_right], 0
-
-.applied:
+.store:
     pop  dx
     pop  cx
     pop  bx
     pop  ax
-    ret
-
-ps2_flush_output:
-    push ax
-    push cx
-
-    mov  cx, 32
-.loop:
-    in   al, 0x64
-    test al, 0x01
-    jz   .done
-    in   al, 0x60
-    loop .loop
 .done:
-    pop  cx
-    pop  ax
-    ret
-
-ps2_wait_input_clear:
-    push cx
-    mov  cx, 0xFFFF
-.loop:
-    in   al, 0x64
-    test al, 0x02
-    jz   .ok
-    loop .loop
-    stc
-    jmp  .done
-.ok:
-    clc
-.done:
-    pop  cx
-    ret
-
-ps2_read_data:
-    push cx
-    mov  cx, 0xFFFF
-.loop:
-    in   al, 0x64
-    test al, 0x01
-    jnz  .ok
-    loop .loop
-    stc
-    jmp  .done
-.ok:
-    in   al, 0x60
-    clc
-.done:
-    pop  cx
-    ret
-
-ps2_wait_output_full:
-    push cx
-    mov  cx, 0xFFFF
-.loop:
-    in   al, 0x64
-    test al, 0x01
-    jnz  .ok
-    loop .loop
-    stc
-    jmp  .done
-.ok:
-    clc
-.done:
-    pop  cx
-    ret
-
-ps2_wait_mouse_output:
-    push cx
-    mov  cx, 0xFFFF
-.loop:
-    in   al, 0x64
-    test al, 0x01
-    jz   .next
-    test al, 0x20
-    jnz  .ok
-.next:
-    loop .loop
-    stc
-    jmp  .done
-.ok:
-    clc
-.done:
-    pop  cx
-    ret
-
-ps2_mouse_reset:
-    push ax
-
-    mov  al, 0xFF
-    call ps2_mouse_send
-    jc   .fail
-    call ps2_read_data
-    jc   .ok
-    cmp  al, 0xAA
-    jne  .ok
-    call ps2_read_data
-.ok:
-    clc
-    jmp  .done
-.fail:
-    stc
-.done:
-    pop  ax
-    ret
-
-ps2_mouse_send:
-    push ax
-    push bx
-    push cx
-
-    mov  bl, al
-    mov  cl, 3
-.retry:
-    call ps2_flush_output
-    call ps2_wait_input_clear
-    jc   .try_again
-    mov  al, 0xD4
-    out  0x64, al
-    call ps2_wait_input_clear
-    jc   .try_again
-    mov  al, bl
-    out  0x60, al
-    call ps2_read_data
-    jc   .try_again
-    cmp  al, 0xFA
-    je   .ok
-    cmp  al, 0xFE
-    je   .try_again
-.try_again:
-    dec  cl
-    jnz  .retry
-    stc
-    jmp  .done
-.ok:
-    clc
-.done:
-    pop  cx
-    pop  bx
-    pop  ax
     ret
 
 poll_shift_exit:
@@ -2634,8 +2197,6 @@ poll_shift_exit:
     ret
 
 handle_mouse_click:
-    cmp  byte [setup_step], SETUP_NONE
-    jne  .done
     cmp  byte [modal_action], PROMPT_NONE
     jne  .done
     mov  al, [active_window]
@@ -2649,21 +2210,6 @@ handle_mouse_click:
     ret
 .files:
     call files_mouse_click
-.done:
-    ret
-
-handle_mouse_right_click:
-    cmp  byte [setup_step], SETUP_NONE
-    jne  .done
-    cmp  byte [modal_action], PROMPT_NONE
-    je   .window
-    mov  byte [modal_action], PROMPT_NONE
-    ret
-.window:
-    cmp  byte [active_window], WINDOW_DESKTOP
-    je   .done
-    mov  byte [active_window], WINDOW_DESKTOP
-    call set_default_status
 .done:
     ret
 
@@ -2746,8 +2292,6 @@ load_user_name_cache:
 
 term_log_append_command:
     call term_log_get_tail
-    mov  al, TERM_COLOR_CMD
-    call term_log_append_char_at_di
     mov  si, user_name_cache
     call term_log_append_local_string_at_di
     mov  al, '>'
@@ -2762,171 +2306,13 @@ term_log_append_kernel_response:
     cmp  byte [resp_copy], 0
     je   .done
     call term_log_get_tail
-    ; choose color: red for error, green for info
-    mov  al, [term_kind]
-    cmp  al, TERM_RESP_ERROR
-    je   .err_color
-    mov  al, TERM_COLOR_RESP
-    jmp  .write_color
-.err_color:
-    mov  al, TERM_COLOR_ERR
-.write_color:
-    call term_log_append_char_at_di
+    mov  si, s_kernel_prompt
+    call term_log_append_local_string_at_di
     mov  si, resp_copy
     call term_log_append_local_string_at_di
     mov  al, 10
     call term_log_append_char_at_di
 .done:
-    ret
-
-; ─────────────────────────────────────────────────────────────────────────────
-; print_term_output_colored
-;   Renders term_output with per-line colors using inline marker bytes.
-;   Marker byte at start of each line:
-;     TERM_COLOR_CMD  (0x01) -> orange
-;     TERM_COLOR_RESP (0x02) -> green
-;     TERM_COLOR_ERR  (0x03) -> red
-;   dh = start row, dl = start col
-; ─────────────────────────────────────────────────────────────────────────────
-print_term_output_colored:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov  si, term_output
-    mov  [text_row], dh
-    mov  [text_col], dl
-    mov  [text_start_col], dl
-    mov  byte [text_color], COL_DEF
-
-    ; compute last visible row
-    mov  al, dh
-    add  al, 16             ; TERM_VISIBLE_ROWS
-    dec  al
-    mov  [wrap_last_row], al
-    mov  byte [wrap_width], 32  ; columns available
-
-.next_byte:
-    lodsb
-    test al, al
-    jz   .ptoc_done
-
-    ; check for color marker (values 0x01-0x03 are below printable space)
-    cmp  al, TERM_COLOR_CMD
-    je   .set_cmd_color
-    cmp  al, TERM_COLOR_RESP
-    je   .set_resp_color
-    cmp  al, TERM_COLOR_ERR
-    je   .set_err_color
-
-    cmp  al, 10
-    je   .ptoc_newline
-    cmp  al, 13
-    je   .next_byte
-    cmp  al, 32
-    jb   .next_byte
-    cmp  al, 126
-    ja   .next_byte
-
-    ; check column wrap
-    mov  ah, [text_col]
-    sub  ah, [text_start_col]
-    cmp  ah, [wrap_width]
-    jb   .ptoc_print
-    push ax
-    call wrapped_advance_line
-    pop  ax
-    jc   .ptoc_done
-    cmp  al, ' '
-    je   .next_byte
-
-.ptoc_print:
-    call draw_text_char
-    inc  byte [text_col]
-    jmp  .next_byte
-
-.ptoc_newline:
-    call wrapped_advance_line
-    jc   .ptoc_done
-    jmp  .next_byte
-
-.set_cmd_color:
-    mov  byte [text_color], COL_CMD
-    jmp  .next_byte
-.set_resp_color:
-    mov  byte [text_color], COL_RESP
-    jmp  .next_byte
-.set_err_color:
-    mov  byte [text_color], COL_ERR
-    jmp  .next_byte
-
-.ptoc_done:
-    pop  si
-    pop  dx
-    pop  cx
-    pop  bx
-    pop  ax
-    ret
-
-; ─────────────────────────────────────────────────────────────────────────────
-; term_count_lines  ->  CX = number of newlines in term_output
-; ─────────────────────────────────────────────────────────────────────────────
-term_count_lines:
-    push ax
-    push si
-    mov  si, term_output
-    xor  cx, cx
-.loop:
-    lodsb
-    test al, al
-    jz   .done
-    cmp  al, 10
-    jne  .loop
-    inc  cx
-    jmp  .loop
-.done:
-    pop  si
-    pop  ax
-    ret
-
-; ─────────────────────────────────────────────────────────────────────────────
-; term_scroll_to_fit
-;   Removes top lines until line count <= 16 (TERM_VISIBLE_ROWS).
-; ─────────────────────────────────────────────────────────────────────────────
-term_scroll_to_fit:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    mov  ax, cs
-    mov  es, ax
-.check:
-    call term_count_lines
-    cmp  cx, 16
-    jbe  .done
-    mov  si, term_output
-.find_nl:
-    lodsb
-    test al, al
-    jz   .done
-    cmp  al, 10
-    jne  .find_nl
-    mov  di, term_output
-.shift:
-    lodsb
-    stosb
-    test al, al
-    jnz  .shift
-    jmp  .check
-.done:
-    pop  es
-    pop  di
-    pop  si
-    pop  cx
-    pop  ax
     ret
 
 term_log_get_tail:
@@ -2975,12 +2361,7 @@ kbd_read:
     ret
 
 set_default_status:
-    cmp  byte [mouse_available], 0
-    je   .no_mouse
     mov  si, s_status_default
-    jmp  set_status_from_const
-.no_mouse:
-    mov  si, s_status_no_mouse
     jmp  set_status_from_const
 
 set_status_term:
@@ -3003,232 +2384,8 @@ set_status_from_const:
     call copy_zstr_local
     ret
 
-; ─────────────────────────────────────────────────────────────────────────────
-; try_setscreen
-;   Checks if term_input starts with "SETSCREEN ".
-;   If yes: parses the resolution, switches video mode, logs result.
-;   Returns: CF=0 if it WAS a setscreen command (handled)
-;            CF=1 if it was NOT a setscreen command (pass to kernel)
-; ─────────────────────────────────────────────────────────────────────────────
-try_setscreen:
-    push ax
-    push si
-    push di
-
-    mov  si, term_input
-    mov  di, s_cmd_setscreen
-    call str_starts_with
-    jc   .not_setscreen     ; CF=1 means no match -> not our command
-
-    ; skip "SETSCREEN " (10 chars) to get to the resolution string
-    mov  si, term_input + 10
-
-    ; compare against known resolutions
-    mov  di, s_res_320x200
-    call str_eq
-    jc   .do_320
-
-    mov  di, s_res_640x480
-    call str_eq
-    jc   .do_640
-
-    mov  di, s_res_800x600
-    call str_eq
-    jc   .do_800
-
-    mov  di, s_res_1024x768
-    call str_eq
-    jc   .do_1024
-
-    ; unknown resolution
-    mov  si, s_setscreen_bad
-    call term_log_append_local_string_at_di_from_si
-    jmp  .handled
-
-.do_320:
-    mov  ax, 0x0013
-    int  0x10
-    mov  word [vesa_stride], 320
-    mov  si, s_setscreen_ok
-    call term_log_append_local_string_at_di_from_si
-    jmp  .handled
-
-.do_640:
-    call setscreen_vesa
-    dw   0x0101, 640
-    jmp  .handled
-
-.do_800:
-    call setscreen_vesa
-    dw   0x0103, 800
-    jmp  .handled
-
-.do_1024:
-    call setscreen_vesa
-    dw   0x0105, 1024
-    jmp  .handled
-
-.handled:
-    pop  di
-    pop  si
-    pop  ax
-    clc                     ; CF=0: was setscreen
-    ret
-
-.not_setscreen:
-    pop  di
-    pop  si
-    pop  ax
-    stc                     ; CF=1: not setscreen, pass to kernel
-    ret
-
-; ─────────────────────────────────────────────────────────────────────────────
-; setscreen_vesa  (call/ret trick: word after call = vesa_mode, stride)
-;   Sets a VESA mode using 0x0000:0x0500 as safe mode-info buffer.
-;   Reads real BytesPerScanLine from mode info block offset 16.
-; ─────────────────────────────────────────────────────────────────────────────
-setscreen_vesa:
-    ; The two words after the call instruction are: vesa_mode, fallback_stride
-    ; We pop the return address to read them, then jump past them.
-    pop  si                 ; si = address of inline data
-
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-
-    mov  cx, [si]           ; cx = vesa mode number
-    mov  dx, [si + 2]       ; dx = expected width (fallback stride)
-    add  si, 4              ; skip past inline data
-    push si                 ; push corrected return address
-
-    ; Query mode info -> 0x0000:0x0500
-    push cx
-    xor  ax, ax
-    mov  es, ax
-    mov  di, 0x0500
-    mov  ax, 0x4F01
-    ; cx already set
-    int  0x10
-    pop  cx
-
-    cmp  ax, 0x004F
-    jne  .vesa_fail
-    test byte [es:0x0500], 0x01
-    jz   .vesa_fail
-
-    ; set the mode
-    mov  ax, 0x4F02
-    mov  bx, cx
-    int  0x10
-    cmp  ax, 0x004F
-    jne  .vesa_fail
-
-    ; read real stride from mode info block
-    mov  ax, [es:0x0500 + 16]
-    mov  [vesa_stride], ax
-
-    mov  si, s_setscreen_ok
-    call term_log_append_local_string_at_di_from_si
-    jmp  .vesa_done
-
-.vesa_fail:
-    ; fallback: keep current mode, report error
-    mov  si, s_setscreen_fail
-    call term_log_append_local_string_at_di_from_si
-
-.vesa_done:
-    pop  es
-    pop  dx
-    pop  cx
-    pop  bx
-    pop  ax
-    ret                     ; returns to corrected address (past inline data)
-
-; ─────────────────────────────────────────────────────────────────────────────
-; term_log_append_local_string_at_di_from_si
-;   Appends SI string to term_output (finds tail first).
-; ─────────────────────────────────────────────────────────────────────────────
-term_log_append_local_string_at_di_from_si:
-    push di
-    call term_log_get_tail  ; di = end of term_output
-    call term_log_append_local_string_at_di
-    mov  al, 10
-    call term_log_append_char_at_di
-    pop  di
-    ret
-
-; ─────────────────────────────────────────────────────────────────────────────
-; str_starts_with  SI=input, DI=prefix  -> CF=0 if prefix matches, CF=1 if not
-; ─────────────────────────────────────────────────────────────────────────────
-str_starts_with:
-    push ax
-    push si
-    push di
-.loop:
-    mov  al, [di]
-    test al, al
-    jz   .match             ; reached end of prefix -> match
-    cmp  al, [si]
-    jne  .no_match
-    inc  si
-    inc  di
-    jmp  .loop
-.match:
-    pop  di
-    pop  si
-    pop  ax
-    clc
-    ret
-.no_match:
-    pop  di
-    pop  si
-    pop  ax
-    stc
-    ret
-
-; ─────────────────────────────────────────────────────────────────────────────
-; str_eq  SI=a, DI=b  -> CF=1 if equal, CF=0 if not
-; ─────────────────────────────────────────────────────────────────────────────
-str_eq:
-    push ax
-    push si
-    push di
-.loop:
-    mov  al, [si]
-    cmp  al, [di]
-    jne  .no
-    test al, al
-    jz   .yes
-    inc  si
-    inc  di
-    jmp  .loop
-.yes:
-    pop  di
-    pop  si
-    pop  ax
-    stc
-    ret
-.no:
-    pop  di
-    pop  si
-    pop  ax
-    clc
-    ret
-
-s_cmd_setscreen   db 'SETSCREEN ',0
-s_res_320x200     db '320X200',0
-s_res_640x480     db '640X480',0
-s_res_800x600     db '800X600',0
-s_res_1024x768    db '1024X768',0
-s_setscreen_ok    db 'Screen mode set.',0
-s_setscreen_bad   db 'Usage: SETSCREEN 320X200 / 640X480 / 800X600 / 1024X768',0
-s_setscreen_fail  db 'VESA mode not supported.',0
-
 font_off dw 0
 font_seg dw 0
-vesa_stride dw 320       ; current row stride; updated by SETSCREEN command
 loading_highlight db 0
 loading_index db 0
 loading_dot_x dw 148, 162, 172, 176, 172, 162, 148, 142
@@ -3267,15 +2424,8 @@ selected_is_dir db 0
 key_scan db 0
 last_scan db 0
 last_char db 0
-last_char_upper db 0
-kbd_shift_flags db 0
 mouse_available db 0
 mouse_prev_left db 0
-mouse_prev_right db 0
-mouse_packet_index db 0
-mouse_packet0 db 0
-mouse_packet1 db 0
-mouse_packet2 db 0
 shift_exit_down db 0
 user_prompt_len db 0
 render_pending db 0
@@ -3315,7 +2465,7 @@ s_icon_files db 'Files',0
 s_term_title db 'Kernel Terminal',0
 s_term_help db 'ESC close / F files',0
 s_files_title db 'File Manager',0
-s_files_help db 'LMB open/select  RMB back  DEL rm N dir M file',0
+s_files_help db 'UP/DN open DEL rm N dir M file',0
 s_modal_mkdir db 'New folder name',0
 s_modal_mkfile db 'New file name.ext',0
 s_modal_rndir db 'Rename selected dir',0
@@ -3323,8 +2473,7 @@ s_modal_help db 'ENTER save  ESC cancel',0
 s_user_prompt_suffix db '>',0
 s_kernel_prompt db 'kernel> ',0
 s_fallback_user db 'USER',0
-s_status_default db 'PS/2 mouse OK. LMB open RMB back.',0
-s_status_no_mouse db 'No PS/2 mouse. Arrows still work.',0
+s_status_default db 'Mouse or arrows.',0
 s_status_term db 'Terminal ready.',0
 s_status_mkdir db 'Create folder: type name and press Enter.',0
 s_status_mkfile db 'Create file: type NAME.EXT and press Enter.',0
