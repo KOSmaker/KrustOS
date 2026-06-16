@@ -3,7 +3,7 @@ Private OS, made on asembler.
 ------------------------------
 Current status:building
 --------------------------------------------
-current time building KrustOS: 6months 4days
+current time building KrustOS: 6months 5days
 ------------------------------
 Things current aviable:
 1.file system
@@ -30,4 +30,11 @@ If you want make bootable device with this OS, make sure you use Rufus, or other
 7.Make sure CSM(Compatibility Support Module) is turned ON in BIOS
 8.select boot drive with KrustOS flashed
 9.Your in!
----------------------------------------------------------------------------------
+--------------------------How to compile it?--------------------------
+If you want to compile it, you need QEMU and NASM.
+1.download all files(kernel....)
+2.make sure QEMU and NASM is located same path as in run.bat
+3.make sure run.bat is located WITH all files in one folder.
+4.run .bat file, it will automaticly compile base.img, and start OS.
+5.Your in!
+-------------------------------------------------------------------------
