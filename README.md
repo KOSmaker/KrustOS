@@ -3,7 +3,7 @@ Private OS, made on asembler.
 ------------------------------
 Current status:building
 --------------------------------------------
-current time building KrustOS: 6months 5days
+current time building KrustOS: 6months 7days
 ------------------------------
 Things current aviable:
 1.file system
