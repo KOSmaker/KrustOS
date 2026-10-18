@@ -1,4 +1,4 @@
-# KrustOS
+# KrustOS -not in development-
 OS, made on asembler.
 ------------------------------
 -WARNING!
